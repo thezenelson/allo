@@ -115,15 +115,6 @@ def test_basic_int8_gemv(ll=2, dd=2, pp=1, hw=False, runs=(1, 1)):
         ]
     )  # Vertical Pack
 
-    np.array(
-        [
-            np.ascontiguousarray(
-                np.ascontiguousarray(x_itr.transpose()).view(types["np"]).transpose
-            )
-            for x_itr in x
-        ]
-    )
-
     y = np.random.randint(-4, 4, size=(runs[0], ll)).astype(np.int8)
 
     c_allo = [mod(x_packed_itr, y_itr) for x_packed_itr, y_itr in zip(x_packed, y)]
@@ -193,19 +184,19 @@ if __name__ == "__main__":
     # All full tests
     # fmt: off
     full_tests = [
-      # (L,   D,   P,  hw, #sw,#sim,),
-        (2,   2,   2,  F, (100, 2), ),
-        (3,   3,   1,  F, (100, 2), ),
-        (2,   4,   1,  F, (100, 2), ),
-        (3,   4,   1,  F, (100, 2), ),
-        (4,   4,   1,  F, (100, 2), ),
-        (4,   2,   2,  F, (100, 2), ),
-        (4,   4,   2,  F, (100, 2), ),
-        (4,   4,   4,  F, (100, 2), ),
-        (16,  8,   8,  F, (100, 2), ),
-        (50,  20,  4,  F, (100, 2), ),
-        # (256, 128, 8,  T, (100, 2), ),
-        (1024,1024,64, F, (10,  0), ),
+      # (L,   D,   P,  hw,(#sw, #sim),),
+        (2,   2,   2,  F, (100, 2   ), ),
+        (3,   3,   1,  F, (100, 2   ), ),
+        (2,   4,   1,  F, (100, 2   ), ),
+        (3,   4,   1,  F, (100, 2   ), ),
+        (4,   4,   1,  F, (100, 2   ), ),
+        (4,   2,   2,  F, (100, 2   ), ),
+        (4,   4,   2,  F, (100, 2   ), ),
+        (4,   4,   4,  F, (100, 2   ), ),
+        (16,  8,   8,  F, (100, 2   ), ),
+        (50,  20,  4,  F, (100, 2   ), ),
+        # (256, 128, 8,  T, (100, 2   ), ),
+        (1024,1024,64, F, (10,  0   ), ),
         # Currently types over 64 bit aren't supported by Allo for compilation
     ]
     # fmt: on
