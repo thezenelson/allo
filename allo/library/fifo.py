@@ -9,9 +9,9 @@ from ..ir.types import int8, int16, int32, index, Int, UInt
 from ..ir.utils import MockBuffer
 
 def fifo_init(list : "Ty[FIFO_L]", params : "index[3]"):
-    params[0] = 0
-    params[1] = 0
-    params[2] = 0
+    params[0] = 0   # Start
+    params[1] = 0   # End
+    params[2] = 0   # Length
 
 def fifo_queue(list : "Ty[FIFO_L]", params : "index[3]", element : "Ty"):
     if params[2] == FIFO_L:
