@@ -195,7 +195,7 @@ if __name__ == "__main__":
         (4,   4,   4,  F, (100, 2   ), ),
         (16,  8,   8,  F, (100, 2   ), ),
         (50,  20,  4,  F, (100, 2   ), ),
-        # (256, 128, 8,  T, (100, 2   ), ),
+        (256, 128, 8,  T, (100, 2   ), ),
         (1024,1024,64, F, (10,  0   ), ),
         # Currently types over 64 bit aren't supported by Allo for compilation
     ]

@@ -29,83 +29,35 @@ def PE_kernel[
     C[i, j] = v
 
 
-def PE_kernel_packed_int4xint8[
-    K: int32, Mt: int32, Nt: int32
+def PE_kernel_loop[
+    TyA,
+    TyB,
+    TyC,
+    K: int32,
+    Mt: int32,
+    Nt: int32,
+    M: int32,
+    N: int32,
 ](
-    A_in: "int8[K]",  # not bit-packed
-    B_in: "int8[K]",  # bit-packed, each element is 4 bits
-    A_out: "int8[K]",
-    B_out: "int8[K]",
-    C: "int16[Mt, Nt // 2]",  # bit-packed, each element is 8 bits
+    A_in: "TyA[(M // Mt) * (N // Nt) * K]",
+    B_in: "TyB[(M // Mt) * (N // Nt) * K]",
+    A_out: "TyA[(M // Mt) * (N // Nt) * K]",
+    B_out: "TyB[(M // Mt) * (N // Nt) * K]",
+    C: "TyC[Mt * Nt, (M // Mt) * (N // Nt)]",
     i: index,
     j: index,
 ):
-    v: int32 = 0
-    for k in range(K):
-        a: int8 = A_in[k]
-        b_packed: int8 = B_in[k]
-        b0: int4 = b_packed[0:4]
-        b1: int4 = b_packed[4:8]
-        s0: UInt(1) = a[7] ^ b0[3]
-        s1: UInt(1) = a[7] ^ b1[3]
-        au: UInt(8) = dsl.abs(a)
-        b0u: UInt(4) = dsl.abs(b0)
-        b1u: UInt(4) = dsl.abs(b1)
-        op0: UInt(18) = 0
-        op1: UInt(27) = 0
-        op0[0:8] = au
-        op1[0:4] = b0u
-        op1[13:17] = b1u
-        res: UInt(48) = op0 * op1
-        res0u: UInt(12) = res[0:12]
-        res1u: UInt(12) = res[13:25]
-        res0: int16 = -res0u if s0 else res0u
-        res1: int16 = -res1u if s1 else res1u
-        v[0:16] += res0
-        v[16:32] += res1
-        A_out[k] = a
-        B_out[k] = b_packed
-    C[i, j] = v
-
-
-def PE_kernel_packed_int8xint8[
-    K: int32, Mt: int32, Nt: int32
-](
-    A_in: "int8[K]",  # not bit-packed
-    B_in: "int16[K]",  # bit-packed, each element is 8 bits
-    A_out: "int8[K]",
-    B_out: "int16[K]",
-    C: "int32[Mt, Nt]",  # bit-packed, each element is 16 bits
-    i: index,
-    j: index,
-):
-    v: int32 = 0
-    for k in range(K):
-        a: int8 = A_in[k]
-        b_packed: int16 = B_in[k]
-        b0: int8 = b_packed[0:8]
-        b1: int8 = b_packed[8:16]
-        s0: UInt(1) = a[7] ^ b0[7]
-        s1: UInt(1) = a[7] ^ b1[7]
-        au: UInt(8) = dsl.abs(a)
-        b0u: UInt(8) = dsl.abs(b0)
-        b1u: UInt(8) = dsl.abs(b1)
-        # DSP48E1: 18x27 multiplier -> 45-bit result
-        op0: UInt(18) = 0
-        op1: UInt(27) = 0
-        op0[0:8] = au
-        op1[0:8] = b0u
-        op1[17:25] = b1u
-        res: UInt(45) = op0 * op1
-        res0u: UInt(16) = res[0:16]
-        res1u: UInt(16) = res[17:33]
-        res0: int16 = -res0u if s0 else res0u
-        res1: int16 = -res1u if s1 else res1u
-        v[0:16] += res0
-        v[16:32] += res1
-        A_out[k] = a
-        B_out[k] = b_packed
-    C[i, j] = v
+    # for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_loop"):
+    for mni in dsl.grid((M // Mt) * (N // Nt), name="outer_tile_loop"):
+        # Be careful, need to use high precision for accumulation
+        v: TyC = 0
+        for k in range(K):
+            a: TyA = A_in[(mni) * K + k]
+            b: TyB = B_in[(mni) * K + k]
+            v += a * b
+            A_out[(mni) * K + k] = a
+            B_out[(mni) * K + k] = b
+        C[i * Nt + j, mni] = v
 
 
 def systolic_tile[
@@ -124,14 +76,9 @@ def systolic_tile[
         for n in range(Nt):
             B_fifo[n, 0, k] = B[k, n]
     for i, j in dsl.grid(Mt, Nt, name="PE"):
-        with template.meta_if(TyA == int8 and TyB == int16 and TyC == int32):
-            PE_kernel_packed_int8xint8[K, Mt, Nt](
-                A_fifo[i, j], B_fifo[j, i], A_fifo[i, j + 1], B_fifo[j, i + 1], C, i, j
-            )
-        with template.meta_else():
-            PE_kernel[TyA, TyB, TyC, K, Mt, Nt](
-                A_fifo[i, j], B_fifo[j, i], A_fifo[i, j + 1], B_fifo[j, i + 1], C, i, j
-            )
+        PE_kernel[TyA, TyB, TyC, K, Mt, Nt](
+            A_fifo[i, j], B_fifo[j, i], A_fifo[i, j + 1], B_fifo[j, i + 1], C, i, j
+        )
     for k in range(K, name="data_drain"):
         for m in range(Mt):
             A_drain[m] = A_fifo[m, Nt, k]
@@ -205,11 +152,7 @@ def packed_systolic[
             b: Int(TyB.bits * P) = B[bk, ni * Nt // P + bj]
             for p in range(P):
                 local_B[bk, bj * P + p] = b[p * TyB.bits : (p + 1) * TyB.bits]
-        systolic_tile[TyA, TyB, TyC, K, Mt, Nt](
-            local_A,
-            local_B,
-            local_C,
-        )
+        systolic_tile[TyA, TyB, TyC, K, Mt, Nt](local_A, local_B, local_C)
         # reversed traversal, better for cascading systolic arrays with FIFOs
         for sj, si in dsl.grid(Nt, Mt // P, name="store_C_tile"):
             c: Int(TyC.bits * P) = 0
@@ -217,6 +160,127 @@ def packed_systolic[
                 # pylint: disable=unsupported-assignment-operation
                 c[p * TyC.bits : (p + 1) * TyC.bits] = local_C[si * P + p, sj]
             C[mi * Mt // P + si, ni * Nt + sj] = c
+
+
+def packed_systolic_loop[
+    TyA: Int,
+    TyB: Int,
+    TyC: Int,
+    M: int32,
+    K: int32,
+    N: int32,
+    Mt: int32,
+    Nt: int32,
+    P: int32,  # packing factor
+](
+    A: "Int(TyA.bits * P)[M // P, K]",
+    B: "Int(TyB.bits * P)[K, N // P]",
+    C: "Int(TyC.bits * P)[M // P, N]",
+):
+    local_A: TyA[Mt, (M // Mt) * K]
+    local_B: TyB[Nt]
+    local_C: TyC[Mt * Nt, (M // Mt) * (N // Nt)]
+
+    A_fifo: TyA[Mt, Nt + 1, (M // Mt) * (N // Nt) * K]
+    B_fifo: TyB[Nt, Mt + 1, (M // Mt) * (N // Nt) * K]
+
+    A_drain: TyA[Mt]
+    B_drain: TyB[Nt]
+
+    # k needs not be tiled, since it is temporal dimension
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_a"):
+        for k in dsl.grid(K, name="k_loop_tile_A"):
+            for ai in dsl.grid(Mt // P, name="load_A_tile"):
+                # reuse along the ni dimension
+                if ni == 0:
+                    a: Int(TyA.bits * P) = A[mi * Mt // P + ai, k]
+                    for p in range(P):
+                        local_A[ai * P + p, (mi) * K + k] = a[
+                            p * TyA.bits : (p + 1) * TyA.bits
+                        ]
+            for m in range(Mt):
+                A_fifo[m, 0, ((mi) * (N // Nt) + ni) * K + k] = local_A[m, (mi) * K + k]
+
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_b"):
+        for k in dsl.grid(K, name="k_loop_tile_B"):
+            for bj in dsl.grid(Nt // P, name="load_B_tile"):
+                # since the inner access order is different from the outer one,
+                # we cannot cache as a line buffer
+                b: Int(TyB.bits * P) = B[k, ni * Nt // P + bj]
+                for p in range(P):
+                    local_B[bj * P + p] = b[p * TyB.bits : (p + 1) * TyB.bits]
+            for n in range(Nt):
+                B_fifo[n, 0, ((mi) * (N // Nt) + ni) * K + k] = local_B[n]
+    for i, j in dsl.grid(Mt, Nt, name="PE"):
+        PE_kernel_loop[TyA, TyB, TyC, K, Mt, Nt, M, N](
+            A_fifo[i, j],
+            B_fifo[j, i],
+            A_fifo[i, j + 1],
+            B_fifo[j, i + 1],
+            local_C,
+            i,
+            j,
+        )
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_data_drain"):
+        for k in range(K, name="data_drain"):
+            for m in range(Mt):
+                A_drain[m] = A_fifo[m, Nt, k]
+            for n in range(Nt):
+                B_drain[n] = B_fifo[n, Mt, k]
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_c"):
+        for sj, si in dsl.grid(Nt, Mt // P, name="store_C_tile"):
+            c: Int(TyC.bits * P) = 0
+            for p in range(P):
+                c[p * TyC.bits : (p + 1) * TyC.bits] = local_C[
+                    (si * P + p) * Nt + sj, (mi) * (N // Nt) + ni
+                ]
+            C[mi * Mt // P + si, ni * Nt + sj] = c
+
+
+def PE_kernel_packed_int8xint8[
+    K: int32, Mt: int32, Nt: int32
+](
+    A_in: "int8[(M//Mt)*(N//Nt)*K]",  # not bit-packed
+    B_in: "int16[(M//Mt)*(N//Nt)*K]",  # bit-packed, each element is 8 bits
+    A_out: "int8[(M//Mt)*(N//Nt)*K]",
+    B_out: "int16[(M//Mt)*(N//Nt)*K]",
+    local_C: "int32[Mt, Nt // 2, (M // Mt) * (N // Nt)]",  # bit-packed, each element is 16 bits
+    i: index,
+    j: index,
+):
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_tile"):
+        v: int32 = 0
+        for k in range(K):
+            a: int8 = A_in[((mi) * (N // Nt) + ni) * (K) + k]
+            b_packed: int16 = B_in[((mi) * (N // Nt) + ni) * (K) + k]
+            b0: int8 = b_packed[0:8]
+            b1: int8 = b_packed[8:16]
+            s0: UInt(1) = a[7] ^ b0[7]
+            s1: UInt(1) = a[7] ^ b1[7]
+            au: UInt(8) = dsl.abs(a)
+            b0u: UInt(8) = dsl.abs(b0)
+            b1u: UInt(8) = dsl.abs(b1)
+            # DSP48E1: 18x27 multiplier -> 45-bit result
+            op0: UInt(18) = 0
+            op1: UInt(27) = 0
+            op0[0:8] = au
+            op1[0:8] = b0u
+            op1[17:25] = b1u
+            res: UInt(45) = op0 * op1
+            res0u: UInt(16) = res[0:16]
+            res1u: UInt(16) = res[17:33]
+            res0: int16 = -res0u if s0 else res0u
+            res1: int16 = -res1u if s1 else res1u
+            v[0:16] += res0
+            v[16:32] += res1
+            if Nt // 2 != j + 1:
+                # if True:
+                A_out[((mi) * (N // Nt) + ni) * (K) + k] = a
+            if Mt != i + 1:
+                # if True:
+                B_out[((mi) * (N // Nt) + ni) * (K) + k] = b_packed
+            if k == K - 1:
+                local_C[i, j, mi * (N // Nt) + ni] = v
 
 
 def packed_int8xint8_systolic[
@@ -227,39 +291,73 @@ def packed_int8xint8_systolic[
     Nt: int32,
     P: int32,  # packing factor
 ](A: "Int(8 * P)[M // P, K]", B: "Int(8 * P)[K, N // P]", C: "Int(8 * P)[M // P, N]"):
-    local_A: int8[Mt, K]
-    local_B: int16[K, Nt // 2]
-    local_C: int32[Mt, Nt // 2]
+    local_A: Int(8 * P)[K, M // Mt]
+    local_B: int16[Nt // 2]
+    local_C: int32[Mt, Nt // 2, (M // Mt) * (N // Nt)]
+    A_fifo: int8[Mt, Nt // 2 + 1, (M // Mt) * (N // Nt) * K]
+    B_fifo: int16[Nt // 2, Mt + 1, (M // Mt) * (N // Nt) * K]
 
-    # k needs not be tiled, since it is temporal dimension
-    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile"):
+    for mi in dsl.grid(M // Mt, name="outer_tile_A1"):
         # reversed traversal, better for cascading systolic arrays with FIFOs
         # corresponds to the order of the previous `store_C_tile` output
-        for ak, ai in dsl.grid(K, Mt // P, name="load_A_tile"):
-            # reuse along the ni dimension
-            if ni == 0:
-                a: Int(8 * P) = A[mi * Mt // P + ai, ak]
-                for p in range(P):
-                    local_A[ai * P + p, ak] = a[p * 8 : (p + 1) * 8]
-        for bk, bj in dsl.grid(K, Nt // P, name="load_B_tile"):
-            # reuse along the mi dimension
-            # since the inner access order is different from the outer one,
-            # we cannot cache as a line buffer
-            b: Int(8 * P) = B[bk, ni * Nt // P + bj]
-            for p in range(P // 2):
-                local_B[bk, bj * P + p] = b[p * 16 : (p + 1) * 16]
-        systolic_tile[int8, int16, int32, K, Mt, Nt // 2](
-            local_A,
-            local_B,
-            local_C,
-        )
+        for k in range(K, name="data_load_A"):
+            for ai in range(Mt // P, name="load_A_tile1"):
+                # reuse along the ni dimension
+                local_A[k, mi] = A[mi * Mt // P + ai, k]
+
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_A2"):
         # reversed traversal, better for cascading systolic arrays with FIFOs
+        # corresponds to the order of the previous `store_C_tile` output
+        for k in range(K, name="data_load_A"):
+            for ai in range(Mt // P, name="load_A_tile2"):
+                a: Int(8 * P) = local_A[k, mi]
+                for p in range(P):
+                    A_fifo[ai * P + p, 0, ((mi) * (N // Nt) + ni) * (K) + k] = a[
+                        p * 8 : p * 8 + 8
+                    ]
+
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_B"):
+        for k in range(K, name="data_load_B"):
+            # reversed traversal, better for cascading systolic arrays with FIFOs
+            # corresponds to the order of the previous `store_C_tile` output
+            for bj in range(Nt // P, name="load_B_tile"):
+                # reuse along the mi dimension
+                # since the inner access order is different from the outer one,
+                # we cannot cache as a line buffer
+                b: Int(8 * P) = B[k, ni * Nt // P + bj]
+                for p in range(P // 2):
+                    local_B[bj * P + p] = b[p * 16 : (p + 1) * 16]
+            for n in range(Nt // 2):
+                B_fifo[n, 0, ((mi) * (N // Nt) + ni) * (K) + k] = local_B[n]
+
+    for i, j in dsl.grid(Mt, Nt // 2, name="PE"):
+        PE_kernel_packed_int8xint8[K, Mt, Nt](
+            A_fifo[i, j],
+            B_fifo[j, i],
+            A_fifo[i, j + 1],
+            B_fifo[j, i + 1],
+            local_C,
+            i,
+            j,
+        )
+
+    # A_drain: int8[Mt]
+    # B_drain: int16[Nt//2]
+    # for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_drain"):
+    #     for k in range(K, name="drain"):
+    #         # for ai in range(Mt // P, name="drain"):
+    #         for m in range(Mt):
+    #             A_drain[m] = A_fifo[m, Nt, k]
+    #         for n in range(Nt // 2):
+    #             B_drain[n] =  B_fifo[n, Mt, k]
+
+    for mi, ni in dsl.grid(M // Mt, N // Nt, name="outer_tile_C"):
         for sj, si in dsl.grid(Nt // 2, Mt // P, name="store_C_tile"):
             c0: Int(8 * P) = 0
             c1: Int(8 * P) = 0
             for p in range(P):
                 # pylint: disable=unsupported-assignment-operation
-                x: int32 = local_C[si * P + p, sj]
+                x: int32 = local_C[si * P + p, sj, mi * (N // Nt) + ni]
                 c0[p * 8 : (p + 1) * 8] = x[0:16]
                 c1[p * 8 : (p + 1) * 8] = x[16:32]
             C[mi * Mt // P + si, ni * Nt + 2 * sj] = c0
@@ -267,6 +365,47 @@ def packed_int8xint8_systolic[
 
 
 def schedule_systolic(s):
+    if s.top_func_name == "packed_int8xint8_systolic":
+        assert len(s.inst_list) == 6
+        submodule_name = "PE_kernel_packed_int8xint8"
+        # return s
+
+        M0, M1 = s.inst_list[-3], s.inst_list[-2]
+        s.partition(
+            s.local_C, dim=0
+        )  # required, otherwise it will fail dataflow checking
+        s.partition(s.local_B, dim=1)
+
+        # s.partition(s.B_fifo, dim=0)
+
+        # Pipeline data access loops
+        load_A_loop1 = s.get_loops(s.top_func_name)["outer_tile_A1"]["ai"]
+        s.pipeline(load_A_loop1, rewind=True)
+        load_A_loop2 = s.get_loops(s.top_func_name)["outer_tile_A2"]["ai"]
+        s.pipeline(load_A_loop2, rewind=True)
+        load_B_loop = s.get_loops(s.top_func_name)["outer_tile_B"]["bj"]
+        s.pipeline(load_B_loop, rewind=True)
+        store_C_loop = s.get_loops(s.top_func_name)["outer_tile_C"]["si"]
+        s.pipeline(store_C_loop, rewind=True)
+
+        # Pipeline each tile with rewind
+        PE_loops = s.get_loops(submodule_name)["outer_tile_tile"]["k"]
+        PE_loops.path = submodule_name
+        s.pipeline(PE_loops, rewind=True)
+
+        # Unfold all tiles
+        pe = s.unfold(
+            f"{s.top_func_name}:PE", [0, 1]
+        )  # specify which are spatial loops
+
+        # Buffer tos
+        s.to(MockBuffer(s.top_func_name, "A_fifo"), pe, axis=1, depth=M0 + 1)
+        s.to(MockBuffer(s.top_func_name, "B_fifo"), pe, axis=1, depth=M1 + 1)
+        # s.to(MockBuffer(s.top_func_name, "local_C"), pe, axis=1, depth=5)
+
+        print("done scheduling")
+        return s
+
     if s.top_func_name == "systolic":
         assert len(s.inst_list) == 8
         tile_name = "systolic_tile"
@@ -277,7 +416,7 @@ def schedule_systolic(s):
         M0, M1 = s.inst_list[-3], s.inst_list[-2]
     elif s.top_func_name == "packed_int8xint8_systolic":
         assert len(s.inst_list) == 6
-        tile_name = "systolic_tile"
+        tile_name = "systolic_tile_packed_int8xint8"
         M0, M1 = s.inst_list[-3], s.inst_list[-2]
     else:
         raise ValueError(
@@ -303,4 +442,39 @@ def schedule_systolic(s):
     pe = s.unfold(f"{tile_name}:PE", [0, 1])  # specify which are spatial loops
     s.to(MockBuffer(tile_name, "A_fifo"), pe, axis=1, depth=M0 + 1)
     s.to(MockBuffer(tile_name, "B_fifo"), pe, axis=0, depth=M1 + 1)
+    return s
+
+
+def schedule_systolic_loop(s):
+    if s.top_func_name == "packed_systolic_loop":
+        assert len(s.inst_list) == 9
+        tile_name = "systolic_tile_loop"
+        tile_name = s.top_func_name
+        submodule_name = "PE_kernel_loop"
+        M0, M1 = s.inst_list[-3], s.inst_list[-2]
+    else:
+        raise ValueError(
+            f"Cannot apply `schedule_systolic` to function: {s.top_func_name}"
+        )
+    s.partition(s.local_A, dim=1)
+    s.partition(s.local_B, dim=1)
+    s.partition(s.local_C, dim=1)
+    load_A_loop = s.get_loops(s.top_func_name)["outer_tile_a"]["ai"]
+    s.pipeline(load_A_loop, rewind=True)
+    load_B_loop = s.get_loops(s.top_func_name)["outer_tile_b"]["bj"]
+    s.pipeline(load_B_loop, rewind=True)
+    PE_loops = s.get_loops(submodule_name)["outer_tile_loop"]["k"]
+    PE_loops.path = submodule_name
+    s.pipeline(PE_loops, rewind=True)
+    pe = s.unfold(f"{s.top_func_name}:PE", [0, 1])  # specify which are spatial loops
+    store_C_loop = s.get_loops(tile_name)["outer_tile_c"]["si"]
+    s.pipeline(store_C_loop, rewind=True)
+
+    s.to(MockBuffer(s.top_func_name, "local_C"), [0], axis=0, depth=17)
+    s.to(MockBuffer(tile_name, "A_fifo"), pe, axis=1, depth=2)
+    s.to(MockBuffer(tile_name, "B_fifo"), pe, axis=0, depth=2)
+
+    s.inline(s.top_func_name)
+    s.inline(tile_name)
+    print("done scheduling")
     return s

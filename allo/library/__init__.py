@@ -3,6 +3,8 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from . import layers
+
 from .systolic import (
     systolic,
     packed_systolic,
@@ -16,6 +18,8 @@ from .gemv import (
 )
 
 KERNEL2SCHEDULE = {}
+
+KERNEL2SCHEDULE.update(layers.KERNEL2SCHEDULE)
 
 KERNEL2SCHEDULE.update(
     {
