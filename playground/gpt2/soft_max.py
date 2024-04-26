@@ -30,7 +30,7 @@ def soft_max_np(logits):
 
     return torch.from_numpy(func_out)
 
-csim = True
+csim = False
 def soft_max(torch_logits):
     from allo.library.layers.soft_max import soft_max
 
@@ -75,8 +75,8 @@ def soft_max(torch_logits):
             link_hls=True,
         )
 
-        csim_out = np.zeros(np_logits.shape)
-        hls_soft_max_mod(np_logits, csim_out)
+        csim_out = np.zeros(np_logits.shape[1])
+        hls_soft_max_mod(np_logits)
 
     print()
     np_out = soft_max_np(torch_logits).numpy(force=True)    
@@ -84,6 +84,6 @@ def soft_max(torch_logits):
 
     print(f"max: {np.max(np_out)}, min: {np.min(np_out)}")
     print(f"max: {np.max(csim_out)}, min: {np.min(csim_out)}")
-    np.testing.assert_allclose(np_out, csim_out, rtol=5e7)
+    np.testing.assert_allclose(np_out, [csim_out], rtol=5e7)
 
-    return torch.tensor(np.copy(csim_out))
+    return torch.tensor(np.copy([csim_out]))

@@ -114,6 +114,7 @@ class IPModule:
         # function call
         out_str += "\n"
         out_str += f"  {self.top}({', '.join(in_ptrs)});\n"
+        out_str += "  for(int i = 0; i < 50257; i++)\n    if (p_arg1[i] != 0)\n      fprintf(stderr, \"%.4e, \", p_arg1[i]);\n"
         # Return
         out_str += "}\n\n"
         # Add pybind11 wrapper

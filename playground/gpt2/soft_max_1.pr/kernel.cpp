@@ -89,6 +89,7 @@ void top(
         fprintf(stderr, "%.4e, ", v41);
     }
   }
+  fprintf(stderr, "\n");
 }
 
 
