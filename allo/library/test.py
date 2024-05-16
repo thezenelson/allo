@@ -14,9 +14,7 @@ def run_test(function, sub_module, reference, top_config, config, input, runs=(1
     """Runs test configurations for given allo module."""
     np.set_printoptions(formatter={"int": hex})
 
-    mlir_runs = runs[0]
-    csim_runs = runs[1]
-    compile = runs[2]
+    mlir_runs, csim_runs, compile = runs
     
     s_top = allo.customize(function, instantiate=[*top_config])
 
